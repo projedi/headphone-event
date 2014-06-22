@@ -1,0 +1,8 @@
+[Unit]
+Description=Headphone event handler
+
+[Service]
+ExecStart=/home/projedi/.bin/headphone-event
+
+[Install]
+WantedBy=default.target
