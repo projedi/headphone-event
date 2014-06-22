@@ -26,6 +26,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <pulse/pulseaudio.h>
 
@@ -38,44 +39,50 @@
 	goto cleanup;\
 }
 
-static void graceful_exit(pa_mainloop_api* mainloop_api, int code, char const* format, ...) {
-	assert(mainloop_api);
+struct state_t {
+	pa_mainloop_api* mainloop_api;
+};
+
+static void graceful_exit(struct state_t* state, int code, char const* format, ...) {
+	assert(state->mainloop_api);
 	va_list args;
 	va_start(args, format);
 	to_log(format, args);
 	va_end(args);
-	mainloop_api->quit(mainloop_api, code);
+	state->mainloop_api->quit(state->mainloop_api, code);
 }
 
-static char const* get_available_str(enum pa_port_available available) {
-	switch (available) {
-		case PA_PORT_AVAILABLE_YES: return "available";
-		case PA_PORT_AVAILABLE_NO: return "not available";
-		case PA_PORT_AVAILABLE_UNKNOWN: return "unknown";
-		default: assert(0);
-	}
+static void headphones_plugged(state_t* UNUSED(data)) { }
+
+static void headphones_unplugged(state_t* UNUSED(data)) {
+	system("mpc pause");
 }
 
-static void get_card_info_callback(pa_context* ctx, pa_card_info const* card, int is_last,
-		void *UNUSED(data)) {
+static void get_card_info_callback(pa_context* ctx, pa_card_info const* card, int is_last, void *data) {
 	if(is_last < 0) {
 		to_log("Failed to get card information: %s", pa_strerror(pa_context_errno(ctx)));
 		return;
 	}
 	if(is_last) return;
 	assert(card);
-	if (card->ports)
-		for(pa_card_port_info** p = card->ports; *p; ++p)
-			printf("\t%s: %s (%s)\n", (*p)->name, (*p)->description, get_available_str((*p)->available));
+	if (card->ports) {
+		for(pa_card_port_info** p = card->ports; *p; ++p) {
+			if(!strcmp((*p)->name, "analog-output-headphones")) {
+				switch((*p)->available) {
+					case PA_PORT_AVAILABLE_YES: headphones_plugged(data); break;
+					case PA_PORT_AVAILABLE_NO: headphones_unplugged(data); break;
+					default: break;
+				}
+			}
+		}
+	}
 }
 
 static void context_subscribe_callback(pa_context *ctx, pa_subscription_event_type_t type,
 		uint32_t card_idx, void *data) {
 	assert(ctx);
-	if((type & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_CHANGE) {
-		printf("Event!\n");
+	if((type & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_CHANGE)
 		pa_operation_unref(pa_context_get_card_info_by_index(ctx, card_idx, get_card_info_callback, data));
-	}
 }
 
 static void context_state_callback(pa_context* ctx, void* data) {
@@ -98,6 +105,7 @@ static void context_state_callback(pa_context* ctx, void* data) {
 }
 
 int main() {
+	static struct state_t state;
 	pa_mainloop* mainloop = NULL;
 	pa_context* context = NULL;
 	int code = 1;
@@ -105,12 +113,12 @@ int main() {
 	if(!(mainloop = pa_mainloop_new()))
 		fail_log(context, "pa_mainloop_new", cleanup);
 
-	pa_mainloop_api* mainloop_api = pa_mainloop_get_api(mainloop);
+	state.mainloop_api = pa_mainloop_get_api(mainloop);
 
-	if(!(context = pa_context_new(mainloop_api, NULL)))
+	if(!(context = pa_context_new(state.mainloop_api, NULL)))
 		fail_log(context, "pa_context_new", cleanup);
 
-	pa_context_set_state_callback(context, context_state_callback, mainloop_api);
+	pa_context_set_state_callback(context, context_state_callback, &state);
 	if(pa_context_connect(context, NULL, 0, NULL) < 0)
 		fail_log(context, "pa_context_connect", cleanup);
 
