@@ -30,6 +30,11 @@
 
 #include <pulse/pulseaudio.h>
 
+#include <X11/XF86keysym.h>
+#include <X11/XKBlib.h>
+#include <X11/Xlib.h>
+#include <X11/extensions/XTest.h>
+
 #define UNUSED(x) x __attribute__((unused))
 
 #define to_log(...) fprintf(stderr, __VA_ARGS__);
@@ -41,6 +46,7 @@
 
 struct state_t {
 	pa_mainloop_api* mainloop_api;
+	Display* display;
 };
 
 static void graceful_exit(struct state_t* state, int code, char const* format, ...) {
@@ -52,10 +58,25 @@ static void graceful_exit(struct state_t* state, int code, char const* format, .
 	state->mainloop_api->quit(state->mainloop_api, code);
 }
 
-static void headphones_plugged(state_t* UNUSED(data)) { }
+static void press_key(struct state_t* data, KeySym keysym) {
+	KeyCode code = XKeysymToKeycode(data->display, keysym);
 
-static void headphones_unplugged(state_t* UNUSED(data)) {
-	system("mpc pause");
+	XTestFakeKeyEvent(data->display, code, True, CurrentTime);
+	XTestFakeKeyEvent(data->display, code, False, CurrentTime);
+
+	XFlush(data->display);
+}
+
+static void headphones_plugged(struct state_t* data) {
+	KeySym keysym = XF86XK_Launch1;
+	press_key(data, keysym);
+}
+
+static void headphones_unplugged(struct state_t* data) {
+	// Can also do:
+	// KeySym keysym = XStringToKeysym("XF86MonBrightnessDown");
+	KeySym keysym = XF86XK_Launch2;
+	press_key(data, keysym);
 }
 
 static void get_card_info_callback(pa_context* ctx, pa_card_info const* card, int is_last, void *data) {
@@ -106,9 +127,17 @@ static void context_state_callback(pa_context* ctx, void* data) {
 
 int main() {
 	static struct state_t state;
+	Display* display = NULL;
 	pa_mainloop* mainloop = NULL;
 	pa_context* context = NULL;
 	int code = 1;
+
+	if(!(display = XOpenDisplay(NULL))) {
+		fprintf(stderr, "Error: Can't open display\n");
+		goto cleanup;
+	}
+
+	state.display = display;
 
 	if(!(mainloop = pa_mainloop_new()))
 		fail_log(context, "pa_mainloop_new", cleanup);
@@ -130,6 +159,9 @@ cleanup:
 
 	if(mainloop)
 		pa_mainloop_free(mainloop);
+
+	if(display)
+		XCloseDisplay(display);
 
 	return code;
 }
